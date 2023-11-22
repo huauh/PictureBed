@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>微信读书问答转ANKI by学习骇客</title>
+    <style>
+        textarea {
+            width: 100%;
+            height: 200px;
+            resize: none;
+        }
+
+        button {
+            margin-top: 10px;
+        }
+
+        #input {
+            width: 90%;
+        }
+
+        #output {
+            width: 90%;
+        }
+
+        .truncate {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 90%;
+        }
+    </style>
+</head>
+
+<body>
+    <h4>微信读书转ANKI BY <a href="https://xxhk.org">学习骇客</a></h4>
+    <textarea id="input" placeholder="从微信读书APP里导出笔记，然后粘贴到这里，支持三种混合样式（问答开头的笔记、一句话想法、纯划线）"></textarea><br>
+    <button onclick="processContent()">转换</button><br><br>
+    <textarea id="output" placeholder="处理后的内容将会显示在这里"></textarea><br><br>
+    <button onclick="downloadCSV()">下载</button>
+
+    <script nonce="MTk4ODM0Mjc0NSwyNTUyMTU0MDAy">
+        function processFileContent(content) {
+            // 匹配问答想法（想法部分 和 引用部分），支持换行，但不能有空行
+            let regAAA = /(\d{4}.+发表想法[\s\S]问：[\s\S]*?答：[\s\S]*?UID:\s[\s\S]+?>>.*(?:\r?\n(?!\r?\n).*)*)/g;
+            // 匹配划线 marking-out
+            let regMO = /(\d{4}.+发表想法[\s\S]*?UID:\s[\s\S]+?>>.*(?:\r?\n(?!\r?\n).*)*)/g;
+            let regT = /(?<=发表想法\n)([\s\S]*?(?=(\r?\n)*UID:))/g;          // 匹配「划线 - 随想」
+            let regI = /(?<=UID:\s)([\s\S]+?(?=\r?\n+>>))/g;                 // 匹配「UID：」
+            let regQ = /(问：[\s\S]*?(?=\n*答：))/g;                          // 匹配「问：」
+            let regA = /(答：[\s\S]*?(?=\n*UID:))/g;                          // 匹配「答：」            
+            let regC = /((?<=>>\s).*(?:\r?\n(?!\r?\n).*)*)/g;                // 匹配「引用」
+            let result = [
+                '#html:true',
+                "#separator:Pipe",
+                "#columns:deck|notetype|tags|UID|F1|F2|F3",
+                "#deck column:1",
+                "#notetype column:2",
+                "#tags column:3"
+            ];
+            let decks = ['"02-掌握"', '"01-了解"', '"00-Inbox"'];
+            let noteTypes = ['"微信问答"', '"引文随想"', '"微信划线"'];
+            let headTag = 'A0TAG';
+            let chapters = content.split('◆'); // 按章节拆分
+            // 《书名》
+            let head = chapters[0].match(/^《(.+?)》/)[1].trim().replace(/\s+/g, '-');
+            let title = head;
+            let subtitle = '';
+            if (head.includes('：')) {
+                title = head.split('：').shift();        // 主标题
+                subtitle = head.split('：').shift();     // 副标题
+            }
+            for (let i = 1; i < chapters.length; i++) {
+                let chapter = '', blocks = [], item = '', prefixTag = '';
+                chapter = chapters[i].match(/^(.*)$/m)[0].trim().replace(/\s+/g, '-');   // 第一行是章节名
+                prefixTag = [headTag, title, chapter].join('::');
+                blocks = chapters[i].match(regAAA);     //匹配问答模块
+                if (blocks) {
+                    blocks.forEach(element => {
+                        let deck = 0, noteType = 0;
+                        let uid = '""', ask = '""', answer = '""', citation = '""';
+                        let allTags = '""', askAndanswer = [];
+                        ask = ask.split('').join(element.match(regQ)[0].replace(/"/g, '""'));
+                        answer = answer.split('').join(element.match(regA)[0].replace(/"/g, '""'));
+                        uid = uid.split('').join(element.match(regI)[0]);
+                        askAndanswer = replaceTextByReg([uid, ask, answer].join('|'));
+                        citation = citation.split('').join('引：' + element.match(regC)[0].replace(/"/g, '""'));
+                        allTags = allTags.split('').join((prefixTag + ' ' + askAndanswer[1]).replace(/"/g, '""'));
+                        // 去掉每个字段结尾处的换行符
+                        item = [allTags, askAndanswer[0], citation].join('|').replace(/(\r\n|\n|\r)(?="\|)/gm, "");
+                        item = item.replace(/(\r\n|\n|\r)(?!"\|)/gm, "<br>");
+                        item = [decks[deck], noteTypes[noteType], item].join('|');
+                        result.push(item);
+                    });
+                }
+                // 处理完问答形式的模块，再处理纯划线或划线-想法的模块
+                blocks = chapters[i].replace(regAAA, '').match(regMO);
+                if (blocks) {
+                    blocks.forEach(element => {
+                        let deck = 1, noteType = 1;
+                        let uid = '""', citation = '""', thought = '""';
+                        let tags = '', allTags = '""', markout = [];
+                        uid = uid.split('').join(element.match(regI)[0]);
+                        citation = citation.split('').join(element.match(regC)[0].replace(/"/g, '""'));
+                        thought = thought.split('').join(element.match(regT)[0].replace(/"/g, '""'));
+                        if (thought === null || thought.trim() === '""' || thought.trim() === '') {
+                            thought = '';
+                            noteType = 2;
+                        } else {
+                            [thought, tags] = replaceTextByReg(thought);
+                        }
+                        allTags = allTags.split('').join((prefixTag + ' ' + tags).replace(/"/g, '""'));
+                        markout = [uid, citation, thought].filter(Boolean).join('|');
+                        // 去掉结尾换行符
+                        item = [allTags, markout].join('|').replace(/(\r\n|\n|\r)(?="\|)/gm, "");
+                        item = item.replace(/(\r\n|\n|\r)(?!"\|)/gm, "<br>");
+                        item = [decks[deck], noteTypes[noteType], item].join('|');
+                        result.push(item);
+                    });
+                }
+            }
+            return result.join('\n');
+        }
+
+        function truncateText(text) {
+            const maxLength = 999;
+            if (text.length > maxLength) {
+                return text.substring(0, maxLength) + '...';
+            }
+            return text;
+        }
+
+        // 返回处理后的文本及标签
+        function replaceTextByReg(targetText) {
+            let tags = '标签';
+            let regTag = /[『「](.+?)[」』]/g;                              // 「标签」只匹配 标签
+            let regTagBold = /『(.+?)』/g;                                  // 『标签』匹配 tag、<b>标签
+            let q = targetText.match(regTag);                               // 添加标签
+            if (q) {
+                tags = [...new Set(q.map(tag => tag.replace(regTag, '$1')))].join(' ');
+                targetText = targetText.replace(regTagBold, '<b>$1</b>');   // 对于『』，替换<b>
+                targetText = targetText.replace(regTag, '$1');              // 对于「」，直接去掉
+            };
+            // 通用匹配
+            let replacements = new Map([
+                [   // ![title](imgurl) 匹配 <img>标签
+                    /!\[(.*?)\]\((.*?)\)/g,
+                    '<figure><img src=""$2"" alt=""$1""><figcaption>$1</figcaption></figure>'
+                ],
+                [/`(.+?)`/gs, '<code>$1</code>'],        // `反引号` 匹配 <code>标签
+                [/ū(.+?)ū/gs, '<u>$1</u>'],             // ū下划线ū 匹配 <u>标签
+                [/ī(.+?)ī/gs, '<i>$1</i>'],              // ī斜体ī 匹配 <i>标签
+                [/ā(.+?)ā/gs, '<samp>$1</samp>'],       // ā举例ā 匹配 <samp>标签
+                [/\s+\$(.+?)\$\s+/g, '\\\($1\\\)'],     // MathJax 匹配 \( \)
+
+                [   // [title](url) 匹配 <a>标签
+                    /(?<!!)\[(.*?)\]\((.*?)\)/g,
+                    '<p><a href=""$2"" title=""$1"">[$1]</a></p>'
+                ],
+                [   // 1゜ 1° 1） 匹配 <ol>标签
+                    /(^\d[゜）°][\s\S]*?)(?!\n\d[゜）°])(?=$)/gm,
+                    '<ol>$1</ol>'
+                ],
+                [   // <ol> 再次匹配，添加 <li>标签
+                    /\d[゜）°](.*?)\n*?(?=\d[゜）°]|<\/ol>)/g,
+                    '<li>$1</li>'
+                ],
+                [/^[\-*~]{3}/gm, '']                    // --- 匹配 <br>标签
+            ]);
+            // https://codereview.stackexchange.com/questions/117672/multiple-regex-replacements
+            replacements.forEach(function (value, key) {
+                targetText = targetText.replace(key, value);
+            });
+
+            return [targetText, tags];
+        }
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            //$&表示整个被匹配的字符串
+        }
+
+        function processContent() {
+            let input = document.getElementById('input').value;
+            let output = document.getElementById('output');
+            let processedContent = processFileContent(input);
+            output.value = processedContent;
+        }
+
+        function copyToClipboard() {
+            let output = document.getElementById('output');
+            output.select();
+            document.execCommand('copy');
+        }
+
+        function downloadCSV() {
+            let output = document.getElementById('output').value;
+            let title = document.getElementById('input').value.match(/《(.+?)》/)[1].replace(/\s+/g, '-');
+            if (title.includes('：')) {
+                title = title.split('：').shift();        // 主标题
+            }
+            let truncatedTitle = truncateText(title);
+
+            const today = new Date();
+            const dd = String(today.getDate()).padStart(2, '0');
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const yyyy = today.getFullYear();
+
+            const dateStr = `${yyyy}-${mm}-${dd}`;
+            let filename = 'WX问答：' + truncatedTitle + '-' + `${dateStr}` + '.csv';
+
+            let blob = new Blob([output], { type: 'text/csv;charset=utf-8;' });
+            let link = document.createElement('a');
+            let url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+    </script>
+</body>
+
+</html>
